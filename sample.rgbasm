@@ -1,0 +1,275 @@
+include "utils.rgbinc"
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+section "vblank_interrupt", rom0[$0040]
+	reti
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+def TILES_COUNT						equ (384)
+def BYTES_PER_TILE					equ (16)
+def TILES_BYTE_SIZE					equ (TILES_COUNT * BYTES_PER_TILE)
+
+def TILEMAPS_COUNT					equ (2)
+def BYTES_PER_TILEMAP				equ (1024)
+def TILEMAPS_BYTE_SIZE				equ (TILEMAPS_COUNT * BYTES_PER_TILEMAP)
+
+def GRAPHICS_DATA_SIZE				equ (TILES_BYTE_SIZE + TILEMAPS_BYTE_SIZE)
+def GRAPHICS_DATA_ADDRESS_END		equ ($8000)
+def GRAPHICS_DATA_ADDRESS_START		equ (GRAPHICS_DATA_ADDRESS_END - GRAPHICS_DATA_SIZE)
+
+; load the graphics data from ROM to VRAM
+macro LoadGraphicsDataIntoVRAM
+	ld de, GRAPHICS_DATA_ADDRESS_START
+	ld hl, _VRAM8000
+	.load_tile\@
+		ld a, [de]
+		inc de
+		ld [hli], a
+		ld a, d
+		cp a, high(GRAPHICS_DATA_ADDRESS_END)
+		jr nz, .load_tile\@
+endm
+
+; clear the OAM
+macro InitOAM
+	ld c, OAM_COUNT
+	ld hl, _OAMRAM + OAMA_Y
+	ld de, sizeof_OAM_ATTRS
+	.init_oam\@
+		ld [hl], 0
+		add hl, de
+		dec c
+		jr nz, .init_oam\@
+endm
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+rsset _RAM
+
+; input struct
+WRAM_PAD_INPUT					rb sizeof_PAD_INPUT
+
+; background scrolling
+WRAM_BG_SCX						rb 1
+WRAM_BG_SCY						rb 1
+; sprite scrolling
+WRAM_S_SCX						rb 1
+WRAM_S_SCY						rb 1
+
+; window control
+WRAM_WIN_ENABLE_FLAG			rb 1
+
+WRAM_FRAME_COUNTER				rb 1
+
+WRAM_END						rb 0
+
+; sanity checks
+def WRAM_USAGE						equ (WRAM_END - _RAM)
+println "WRAM usage: {d:WRAM_USAGE} bytes"
+assert WRAM_USAGE <= $2000, "Too many bytes used in WRAM"
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+section "sample", rom0
+
+InitSample:
+	; init the WRAM state
+	InitPadInput WRAM_PAD_INPUT
+	
+	xor a
+	ld [WRAM_BG_SCX], a
+	ld [WRAM_BG_SCY], a
+	ld [WRAM_WIN_ENABLE_FLAG], a
+	
+	copy [WRAM_S_SCX], 32
+	copy [WRAM_S_SCY], 32
+
+	; sound
+	copy [WRAM_FRAME_COUNTER], $FF
+	copy [rNR52], AUDENA_ON ; enable sound hardware bit
+	copy [rNR50], $77 ; max volume on both terminals
+	copy [rNR51], $FF ; output to both terminals
+
+	; init the palettes
+	ld a, %11100100
+	ld [rBGP], a
+	ld [rOBP0], a
+	ld a, %00011011
+	ld [rOBP1], a
+
+	InitOAM
+	LoadGraphicsDataIntoVRAM
+
+	; enable the vblank interrupt
+	ld a, IEF_VBLANK
+	ld [rIE], a
+	ei
+
+	; place the window at the bottom of the LCD
+	copy [rWX], 7
+	copy [rWY], 120
+	
+	copy [hl], 32
+
+	; set the graphics parameters and turn back LCD on
+	ld a, LCDCF_ON | LCDCF_WIN9C00 | LCDCF_WINON | LCDCF_BG8800 | LCDCF_BG9800 | LCDCF_OBJ16 | LCDCF_OBJON | LCDCF_BGON
+	ld [rLCDC], a
+
+	ret
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+UpdateSample:
+	halt
+
+	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+	; vblank
+	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	; set the background position
+	;copy [rSCX], [WRAM_BG_SCX]
+	;copy [rSCY], [WRAM_BG_SCY]
+	; set the background position
+	xor a
+	ld [rSCX], a
+	ld [rSCY], a
+
+	; toggle the window on/off
+	ldh a, [rLCDC]
+	and a, ~LCDCF_WINON
+	ld hl, WRAM_WIN_ENABLE_FLAG
+	or a, [hl]
+	ldh [rLCDC], a
+	
+	; skip counter check if counter is disabled (== $FF)
+	ld a, $FF
+	ld hl, WRAM_FRAME_COUNTER
+	cp a, [hl]
+	jr z, .no_trigger_sound_2
+		;play sound 2 when counter reaches zero
+		dec [hl]
+		jr nz, .no_trigger_sound_2
+			;play sound 2
+			copy [rNR10], $00
+			copy [rNR11], $80
+			copy [rNR12], $F3
+			copy [rNR13], $C1
+			copy [rNR14], $87
+			;deactivate counter
+			dec [hl]
+		.no_trigger_sound_2
+			
+	
+		; set the first sprite
+def SPRITE_0_ADDRESS equ (_OAMRAM)
+	copy [SPRITE_0_ADDRESS + OAMA_X], [WRAM_S_SCX]
+	copy [SPRITE_0_ADDRESS + OAMA_Y], [WRAM_S_SCY]
+	copy [SPRITE_0_ADDRESS + OAMA_TILEID], 16
+	copy [SPRITE_0_ADDRESS + OAMA_FLAGS], OAMF_PAL0
+
+	; set the second sprite
+def SPRITE_1_ADDRESS equ (_OAMRAM + sizeof_OAM_ATTRS)
+	copy [SPRITE_1_ADDRESS + OAMA_Y], 80
+	copy [SPRITE_1_ADDRESS + OAMA_X], 80
+	copy [SPRITE_1_ADDRESS + OAMA_TILEID], 0
+	copy [SPRITE_1_ADDRESS + OAMA_FLAGS], OAMF_PAL0 | OAMF_XFLIP
+
+	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+	; logic
+	;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	UpdatePadInput WRAM_PAD_INPUT
+
+	; dpad check
+	TestPadInput_HeldAll WRAM_PAD_INPUT, PADF_LEFT
+	jr nz, .left_checked
+		ld hl, WRAM_S_SCX
+		dec [hl]
+	.left_checked
+	
+	; dpad check
+	TestPadInput_Pressed WRAM_PAD_INPUT, PADF_LEFT
+	jr nz, .left_checked2
+		ld de, $C60B
+		jr .play_sound
+	.left_checked2
+
+	TestPadInput_HeldAll WRAM_PAD_INPUT, PADF_RIGHT
+	jr nz, .right_checked
+		ld hl, WRAM_S_SCX
+		inc [hl]
+		ld de, $C7D6
+		jr .play_sound
+	.right_checked
+
+	TestPadInput_HeldAll WRAM_PAD_INPUT, PADF_UP
+	jr nz, .up_checked
+		ld hl, WRAM_S_SCY
+		;dec [hl]
+		cp a, 20
+		jr z, .not_equal1
+			ld a, 20
+			copy [WRAM_S_SCY], a
+			jp .down_checked
+		.not_equal1:
+	.up_checked
+
+	TestPadInput_HeldAll WRAM_PAD_INPUT, PADF_DOWN
+	jr nz, .down_checked
+		ld hl, WRAM_S_SCY
+		;inc [hl]
+		ld a, [hl]
+		cp a, 70
+		jr z, .not_equal2
+			ld a, 70
+			copy [WRAM_S_SCY], a
+			jp .down_checked
+		.not_equal2:
+	.down_checked
+
+	; window toggle
+	TestPadInput_Released WRAM_PAD_INPUT, PADF_A
+	jr nz, .window_toggle_done
+		ld a, [WRAM_WIN_ENABLE_FLAG]
+		cpl
+		and a, LCDCF_WINON
+		ld [WRAM_WIN_ENABLE_FLAG], a
+	.window_toggle_done
+
+	
+	; window toggle
+	TestPadInput_Released WRAM_PAD_INPUT, PADF_B
+	jr nz, .no_start_sound_1
+		; play sound 1
+		copy [rNR10], $00
+		copy [rNR11], $80
+		copy [rNR12], $F3
+		copy [rNR13], $83
+		copy [rNR14], $87
+
+		; activate the counter to play sound 2 after a delay
+		copy [WRAM_FRAME_COUNTER], 4
+	.no_start_sound_1
+	
+	ret
+	
+	.play_sound
+		copy [rNR10], $00
+		copy [rNR11], $80
+		copy [rNR12], $F3
+		copy [rNR13], e
+		copy [rNR14], d
+
+	ret
+
+export InitSample, UpdateSample
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+section "graphics_data", rom0[GRAPHICS_DATA_ADDRESS_START]
+incbin "tileset.chr"
+incbin "background.tlm"
+incbin "window.tlm"
+

@@ -1,0 +1,32 @@
+ROM0 bank #0:
+	SECTION: $0000-$0010 ($0011 bytes) ["main"]
+	         $0000 = main
+	         $0000 = main.wait_vblank_u1
+	         $000c = main.loop
+	EMPTY: $0011-$003f ($002f bytes)
+	SECTION: $0040-$0040 ($0001 byte) ["vblank_interrupt"]
+	EMPTY: $0041-$00ff ($00bf bytes)
+	SECTION: $0100-$014f ($0050 bytes) ["header"]
+	         $0100 = entrypoint
+	SECTION: $0150-$02ed ($019e bytes) ["sample"]
+	         $0150 = InitSample
+	         $0195 = InitSample.init_oam_u1
+	         $01a1 = InitSample.load_tile_u2
+	         $01be = UpdateSample
+	         $01ef = UpdateSample.no_trigger_sound_2
+	         $025f = UpdateSample.left_checked
+	         $026b = UpdateSample.left_checked2
+	         $027b = UpdateSample.right_checked
+	         $0292 = UpdateSample.up_checked
+	         $0292 = UpdateSample.not_equal1
+	         $02aa = UpdateSample.down_checked
+	         $02aa = UpdateSample.not_equal2
+	         $02ba = UpdateSample.window_toggle_done
+	         $02da = UpdateSample.no_start_sound_1
+	         $02db = UpdateSample.play_sound
+	EMPTY: $02ee-$5fff ($5d12 bytes)
+	SECTION: $6000-$7fff ($2000 bytes) ["graphics_data"]
+	TOTAL EMPTY: $5e00 bytes
+
+SUMMARY:
+	ROM0: 8704 bytes used / 24064 free
